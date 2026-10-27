@@ -1,0 +1,9 @@
+# Adapt paths and merge this scoped stanza into the mailbox's existing .mailfilter.
+# Place after ../../.header and before .alias/spam includes; do not replace existing rules.
+include "../../.header"
+xfilter "/usr/bin/python3 /home/ACCOUNT/bin/clef-warning.py /home/ACCOUNT/.local/share/clef/signing-key"
+if (/^X-Clef-Verified-Action: junk/:h)
+{
+    to "./.Junk"
+}
+# Existing includes and delivery rules follow here.

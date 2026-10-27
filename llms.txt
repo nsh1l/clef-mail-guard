@@ -1,0 +1,18 @@
+# clef-mail-guard
+
+> Cloudflare Email Worker plus Xserver/maildrop warning and Junk filter. The code is MIT licensed; external services have separate terms.
+
+Start with the README, then use the focused documents below. Examples are not live deployment settings. Never supply real mail or credentials as documentation fixtures.
+
+## Documentation
+
+- [README](README.md): purpose, requirements, quick start.
+- [Setup](docs/setup.md): required configuration, secret handling, manual mailbox integration and cutover.
+- [Architecture and protocol](docs/architecture.md): flow, signed header, thresholds, failure behavior.
+- [Security and limitations](docs/security.md): trust boundaries, privacy, operational limits, rollback.
+- [Repository guide](AGENTS.md): file map and checks for coding agents.
+
+## Optional
+
+- [Japanese article draft](docs/article.ja.md): author's motivation and integration experience; not a deployment guide.
+- [Direct dependencies](THIRD_PARTY.md): declared licenses of installed direct packages.

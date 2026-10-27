@@ -1,0 +1,17 @@
+{
+  "name": "clef-mail-guard",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:nsh1l/clef-mail-guard",
+  "type": "module",
+  "scripts": {
+    "test": "bun test && python3 -m unittest discover -s xserver -p \"test_*.py\"",
+    "check": "bunx --bun wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "postal-mime": "^4.1.4"
+  },
+  "devDependencies": {
+    "wrangler": "^4.153.0"
+  }
+}

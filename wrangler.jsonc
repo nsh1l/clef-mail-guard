@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "clef-mail-guard",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-10",
+  "ai": {
+    "binding": "AI"
+  },
+  "workers_dev": false,
+  "send_metrics": false,
+  "vars": {
+    "MAIL_RECIPIENT": "contact@example.com",
+    "MAIL_RELAY": "clef-relay@mx.example.com"
+  }
+}
