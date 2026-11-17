@@ -16,7 +16,7 @@ from html.parser import HTMLParser
 
 BANNER = "【迷惑メールの疑い】Clefが迷惑メールの可能性があると判定しました。リンク・添付・返信前に送信元を確認してください。誤判定の可能性があります。"
 MAX_TOKENS = 8
-TOKEN_RE = re.compile(r"v1\.([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})\Z")
+TOKEN_RE = re.compile(r"v[12]\.([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})\Z")
 ACTION_RE = re.compile(rb"(?:(?<=\n)|(?<=\r)|\A)X-Clef-Verified-Action:[^\r\n]*(?:(?:\r\n|\n|\r)[ \t][^\r\n]*)*", re.I)
 HEADER_END_RE = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 LINE_END_RE = re.compile(rb"\r\n|\n|\r")
@@ -115,26 +115,60 @@ def decode_url(value):
     return data
 
 
-def valid_token(token, key, message_id, now):
+def body_digest(raw):
+    """Bind a missing-ID result to wire body bytes, normalizing only line endings."""
+    line_start = 0
+    newline = None
+    for ending in LINE_END_RE.finditer(raw):
+        if newline is not None and ending.group() != newline:
+            return None
+        newline = ending.group()
+        if ending.start() == line_start:
+            if line_start == 0:
+                return None
+            body = raw[ending.end():].replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            return hashlib.sha256(body).hexdigest()
+        line_start = ending.end()
+    return None
+
+
+def unique_object(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("duplicate JSON field")
+    return value
+
+
+def valid_token(token, key, message_id, now, body_hash=None):
     token = re.sub(r"[ \t\r\n]+", "", str(token))
     match = TOKEN_RE.fullmatch(token)
     if not match:
         return None
     try:
+        version = int(token[1])
         signature = decode_url(match.group(2))
         payload_bytes = decode_url(match.group(1))
-        expected = hmac.new(key, ("v1." + match.group(1)).encode("ascii"), hashlib.sha256).digest()
+        expected = hmac.new(key, (token[:3] + match.group(1)).encode("ascii"), hashlib.sha256).digest()
         if not hmac.compare_digest(signature, expected):
             return None
-        payload = json.loads(payload_bytes)
-        if not isinstance(payload, dict) or set(payload) != {"version", "spam", "timestamp", "message_id"}:
+        payload = json.loads(payload_bytes, object_pairs_hook=unique_object)
+        fields = {"version", "spam", "timestamp", "message_id"}
+        if version == 2:
+            fields.add("body_sha256")
+        if not isinstance(payload, dict) or set(payload) != fields:
             return None
         score = payload["spam"]
         stamp = payload["timestamp"]
-        if (type(payload["version"]) is int and payload["version"] == 1
+        if not (type(payload["version"]) is int and payload["version"] == version
                 and type(score) in (int, float) and 0.7 <= score <= 1
-                and type(stamp) is int and now - 7 * 86400 <= stamp <= now + 300
-                and type(payload["message_id"]) is str and payload["message_id"] == message_id):
+                and type(stamp) is int and now - 7 * 86400 <= stamp <= now + 300):
+            return None
+        if version == 1:
+            return payload if type(payload["message_id"]) is str and payload["message_id"] == message_id else None
+        digest = payload["body_sha256"]
+        if (type(payload["message_id"]) is str and payload["message_id"] == "" and type(digest) is str
+                and re.fullmatch(r"[0-9a-f]{64}", digest) and body_hash is not None
+                and hmac.compare_digest(digest, body_hash)):
             return payload
         return None
     except (ValueError, TypeError, UnicodeError, OverflowError):
@@ -205,7 +239,9 @@ def _transform(raw, key, now):
     if len(ids) > 1:
         return raw
     message_id = ids[0] if ids else ""
-    verified = [valid_token(token, key, message_id, now) for token in tokens]
+    needs_body = any(re.sub(r"[ \t\r\n]+", "", str(token)).startswith("v2.") for token in tokens)
+    body_hash = body_digest(raw) if needs_body else None
+    verified = [valid_token(token, key, message_id, now, body_hash) for token in tokens]
     scores = [payload["spam"] for payload in verified if payload is not None]
     if not scores:
         return raw

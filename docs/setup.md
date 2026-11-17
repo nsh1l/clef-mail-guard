@@ -75,6 +75,14 @@ On the mailbox server, install `xserver/warn.py` as an account-controlled execut
 
 Create and verify a valid `.Junk` Maildir for the target mailbox before enabling the rule. Maildir structure, ownership and permissions must match the existing mailbox. In maildrop, `to "./.Junk"` finishes processing: it prevents later rules, including external forwarding. Keep scripts and key files outside any public web directory.
 
+## Upgrade and roll back the token protocol
+
+For an existing installation, update the mailbox verifier **first** to the version supporting both v1 and v2, then update the Worker. Keep the same shared key. Nonempty parsed Message-IDs still use v1 exact-ID binding without body authentication; an absent Message-ID header now uses v2 body hashing. Empty or malformed headers do not enable the fallback. Do not update the Worker first: the old verifier cannot verify v2 and will pass that mail through without a Clef warning or Junk action.
+
+Check controlled synthetic mail with an existing ID, an empty ID (no v2 fallback), and a missing-ID message to which transport adds one ID. Confirm both warning and Junk handling on the actual path. Duplicate IDs must still skip result processing. v2 hashes raw MIME body octets after the first CRLFCRLF/LFLF/CRCR separator, converting only CRLF and CR to LF. Headers require uniform CRLF, LF, or CR line endings with an explicit blank separator; mixed or missing boundaries skip v2. Body/footer, CTE, or MIME rewrites beyond line endings that change those octets invalidate the result and fail open. Test any downstream rewriting filters before relying on v2. v2 does not authenticate From, Subject, other top-level headers, or the sender, or stop replay of the same canonical body within 7 days. Stored v1 empty-ID results are not repaired, and v1 exact-ID verification is not relaxed.
+
+For a protocol rollback, restore the old Worker **first**, stopping new v2 issuance, and only then restore the old verifier. Prefer keeping the dual-version verifier while queued or in-flight v2 mail remains. If the old verifier is restored sooner, queued v2 results cannot be verified and receive no Clef warning or Junk action. Switching the Worker back does not convert those results to v1. This is separate from a routing/MX rollback.
+
 ## Enable routing only after a cutover review
 
 1. Back up current authoritative DNS, Email Routing rules and mailbox filters. Plan rollback before changing them.

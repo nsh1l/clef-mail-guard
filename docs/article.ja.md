@@ -26,7 +26,7 @@ Cloudflare Email RoutingからWorkerへメールを渡し、件名や本文な�
 
 ただし、`forward()`で追加できるのは`X-`で始まるヘッダーで、本文を書き換える処理ではない。そこで役割を分けた。Workerは判定結果に署名を付けて渡し、Xserver側でその署名を確認してから、本文への警告やフォルダー振り分けを行う。
 
-送信者が勝手に付けた「迷惑メール判定済み」のヘッダーを、そのまま振り分けの根拠にしないための分担でもある。ただし、この署名は差出人の認証や本文全体の改ざん検知を保証するものではない。
+送信者が勝手に付けた「迷惑メール判定済み」のヘッダーを、そのまま振り分けの根拠にしないための分担でもある。ただし、この署名は差出人の認証を保証するものではない。解析後のMessage-IDがあるメールは、従来どおりIDと判定結果を結び付けるv1を使い、本文は署名の対象にしない。Message-IDヘッダーそのものがないメールだけは、本文のハッシュを含むv2で判定結果を結び付ける。空のヘッダーはv2の対象にしない。
 
 判定を呼ぶ部分は、[src/index.mjs](../src/index.mjs)の`classify()`にまとめている。以下は、その関数をそのまま抜粋したものだ。
 
@@ -126,7 +126,9 @@ def _transform(raw, key, now):
     if len(ids) > 1:
         return raw
     message_id = ids[0] if ids else ""
-    verified = [valid_token(token, key, message_id, now) for token in tokens]
+    needs_body = any(re.sub(r"[ \t\r\n]+", "", str(token)).startswith("v2.") for token in tokens)
+    body_hash = body_digest(raw) if needs_body else None
+    verified = [valid_token(token, key, message_id, now, body_hash) for token in tokens]
     scores = [payload["spam"] for payload in verified if payload is not None]
     if not scores:
         return raw
@@ -145,7 +147,9 @@ def _transform(raw, key, now):
     return message.as_bytes(policy=policy.SMTP.clone(linesep="\n"))
 ```
 
-`valid_token()`は別の関数で、HMAC署名、時刻、Message-IDなどを検証する。検証を通った値がなければ、そのまま返す。`0.9`以上なら本文を書き換えずに振り分け用ヘッダーを付け、それ未満なら編集可能な本文へ警告を付ける。
+`valid_token()`は別の関数で、HMAC署名や時刻などに加え、v1ではMessage-IDの完全一致、v2では本文のハッシュを検証する。検証を通った値がなければ、そのまま返す。`0.9`以上なら本文を書き換えずに振り分け用ヘッダーを付け、それ未満なら編集可能な本文へ警告を付ける。
+
+v2を使うのは、Message-IDヘッダーそのものがないメールだけだ。空のヘッダーがある場合は対象にしない。ヘッダーの改行はCRLF・LF・CRのどれか一つに統一され、本文との間に空行がある必要がある。ハッシュはその空行より後の、生のMIME本文のバイト列から計算する。本文ではCRLFとCRをLFにそろえる以外は変えない。配送途中でMessage-IDが一つ追加されても検証できるが、Fromや件名などのヘッダー、差出人は認証しない。同じ本文への判定結果の使い回しも、有効期間の7日以内は防げない。空の本文では、使い回せる範囲が特に広くなる。また、Content-TypeやCTEなど、本文の解釈を指定するヘッダーが変われば、バイト列が同じでも表示は変わりうる。フッターの追加や転送エンコーディング（CTE）・MIMEの書き換えで本文のバイト列が変われば、検証に失敗して警告や振り分けをせずに通す。v1の完全一致の条件は緩めておらず、保存済みの空IDのv1メールを修復するものでもない。更新はv1/v2対応の検証側、Workerの順に行い、切り戻しは逆順にする。旧検証側へ戻すと配送待ちのv2は検証できないので、詳しい手順は[導入手順](setup.md#upgrade-and-roll-back-the-token-protocol)にまとめた。
 
 警告対象のHTML本文は、元のタグや属性を残さず、読めるテキストを取り出してエスケープした固定のHTMLに作り直す。そのため装飾や画像は失われる。プレーンテキストとHTMLの両方で、一般的なURLやメールアドレスの表記を`https[:]//example[.]invalid`のように変える。リンク先を開いたり、安全性を調べたりする処理ではない。メールソフト独自の自動リンク判定まで完全に抑えられるとは限らない。
 

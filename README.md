@@ -9,6 +9,8 @@ Cloudflare Email Routing -> Email Worker -> verified relay -> Xserver maildrop -
 
 Requirements: Cloudflare Email Routing, Workers AI and a verified relay destination; an Xserver mailbox using maildrop; Bun for build/tests; and Python 3 for the mailbox filter. Use a maintained Python release for new installations. The filter uses Python 3.6.8-compatible standard-library syntax for an existing runtime; this does not mean Python 3.6 remains vendor supported or security maintained.
 
+The signed binding depends on the parsed Message-ID: nonempty IDs keep v1 exact-ID binding without body authentication; an absent Message-ID header uses v2 with a SHA-256 hash of raw MIME body octets, normalizing only line endings. v2 tolerates one transport-added ID but does not authenticate From, Subject, other headers, or the sender, or prevent replay of the same canonical body within 7 days. Body/footer, CTE, or MIME rewrites beyond line endings that change the hashed octets invalidate v2 and fail open. Previously stored v1 empty-ID messages are not repaired. For upgrades, install the v1/v2 verifier first, then the Worker; roll back the Worker first, then the old verifier, which cannot verify queued v2 results. See the protocol and setup guides below for details.
+
 ## Quick start
 
 1. Read [setup](docs/setup.md) before changing routing. Replace **both example addresses** in `wrangler.jsonc` with your own recipient and verified relay. Configure a separate relay that cannot route back through the public MX.

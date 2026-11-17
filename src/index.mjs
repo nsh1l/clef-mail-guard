@@ -23,12 +23,47 @@ function base64url(bytes) {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function warningToken(key, spam, messageId) {
-  const data = new TextEncoder().encode(JSON.stringify({
-    version: 1, spam, timestamp: Math.floor(Date.now() / 1000), message_id: messageId,
-  }));
+async function bodyDigest(raw) {
+  // Hash wire bytes, not MIME-decoded text; tolerate only transport line-ending changes.
+  const bytes = new Uint8Array(raw);
+  let start = -1;
+  let lineStart = 0;
+  let newline;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 13 && bytes[i] !== 10) continue;
+    const width = bytes[i] === 13 && bytes[i + 1] === 10 ? 2 : 1;
+    const kind = width === 2 ? 256 : bytes[i];
+    if (newline !== undefined && newline !== kind) throw new Error("Mixed header line endings");
+    newline = kind;
+    if (i === lineStart) {
+      if (lineStart > 0) start = i + width;
+      break;
+    }
+    i += width - 1;
+    lineStart = i + 1;
+  }
+  if (start < 0) throw new Error("Missing header/body separator");
+  const canonical = new Uint8Array(bytes.length - start);
+  let length = 0;
+  for (let i = start; i < bytes.length; i++) {
+    if (bytes[i] === 13) {
+      canonical[length++] = 10;
+      if (bytes[i + 1] === 10) i++;
+    } else {
+      canonical[length++] = bytes[i];
+    }
+  }
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", canonical.subarray(0, length)));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function warningToken(key, spam, messageId, raw) {
+  const version = messageId ? 1 : 2;
+  const result = { version, spam, timestamp: Math.floor(Date.now() / 1000), message_id: messageId };
+  if (version === 2) result.body_sha256 = await bodyDigest(raw);
+  const data = new TextEncoder().encode(JSON.stringify(result));
   const payload = base64url(data);
-  const signed = `v1.${payload}`;
+  const signed = `v${version}.${payload}`;
   const secret = await crypto.subtle.importKey(
     "raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
@@ -121,9 +156,10 @@ export default {
     }
 
     let parsed;
+    let raw;
     if (message.rawSize <= MAX_PARSE_BYTES) {
       try {
-        const raw = await new Response(message.raw).arrayBuffer();
+        raw = await new Response(message.raw).arrayBuffer();
         parsed = await PostalMime.parse(raw);
       } catch (error) {
         console.warn(JSON.stringify({
@@ -150,8 +186,10 @@ export default {
             const messageId = parsed.messageId || "";
             if (messageId.length > 500) {
               console.warn(JSON.stringify({ event: "clef_warning_skipped", reason: "message_id_too_long" }));
+            } else if (!messageId && parsed.headers.some((header) => header.key === "message-id")) {
+              console.warn(JSON.stringify({ event: "clef_warning_skipped", reason: "empty_message_id" }));
             } else {
-              headers = new Headers({ "X-Clef-Result": await warningToken(env.CLEF_SIGNING_KEY, answer.probabilities.spam, messageId) });
+              headers = new Headers({ "X-Clef-Result": await warningToken(env.CLEF_SIGNING_KEY, answer.probabilities.spam, messageId, raw) });
             }
           }
         }
